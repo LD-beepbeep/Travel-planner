@@ -1,0 +1,123 @@
+<!DOCTYPE html><html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ultimate AI Travel Planner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    details summary {
+      cursor: pointer;
+      list-style: none;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-b from-sky-100 to-emerald-50 text-gray-800">
+  <div class="max-w-7xl mx-auto px-6 py-10">
+    <h1 class="text-4xl md:text-5xl font-extrabold text-center text-emerald-700 mb-6">🌍 Ultimate AI Travel Planner</h1>
+    <p class="text-center text-lg text-gray-600 mb-8">Build every detail of your perfect trip — for every person, every hour. Powered by AI.</p><form id="tripForm" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-white p-6 rounded shadow-xl mb-10">
+  <input class="p-2 border rounded" type="text" id="destination" placeholder="Destination (e.g. Paris)" required />
+  <input class="p-2 border rounded" type="text" id="dates" placeholder="Dates (e.g. Aug 5–10)" required />
+  <input class="p-2 border rounded" type="text" id="members" placeholder="Trip Members & Preferences (e.g. Alex - foodie, prefers museums)" />
+  <input class="p-2 border rounded" type="text" id="groupStructure" placeholder="Stay Together? (Yes / Split days?)" />
+  <input class="p-2 border rounded" type="text" id="accommodationFound" placeholder="Accommodation Found? (Y/N + Info)" />
+  <input class="p-2 border rounded" type="text" id="transportFound" placeholder="Transport Booked? (Y/N + Info)" />
+  <input class="p-2 border rounded" type="text" id="activitiesFound" placeholder="Already Planned Activities" />
+  <input class="p-2 border rounded" type="file" id="docUpload" accept="image/*,.pdf" />
+</form>
+
+<div class="flex flex-wrap justify-center gap-4 mb-10">
+  <button class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded" id="generateBtn">🧠 Generate Plan</button>
+  <button class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded" id="exportPDF">📄 Export PDF</button>
+</div>
+
+<div id="output" class="space-y-8">
+  <div class="bg-white p-6 rounded shadow-xl">
+    <h2 class="text-2xl font-bold text-emerald-700 mb-4">📅 Daily Timetable</h2>
+    <div id="dailyPlan" class="space-y-4"></div>
+  </div>
+
+  <div class="bg-white p-6 rounded shadow-xl">
+    <h2 class="text-2xl font-bold text-emerald-700 mb-4">💰 Budget Overview</h2>
+    <div id="budgetOverview" class="text-gray-700"></div>
+  </div>
+
+  <div id="map" class="w-full h-96 rounded border shadow"></div>
+</div>
+
+  </div>  <script>
+    const groqKey = "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";
+    const model = "meta-llama/llama-4-scout-17b-16e-instruct";
+    const map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    async function extractTextFromImage(file) {
+      return new Promise((resolve) => {
+        Tesseract.recognize(file, 'eng').then(({ data: { text } }) => resolve(text));
+      });
+    }
+
+    document.getElementById('generateBtn').addEventListener('click', async () => {
+      const fields = ['destination', 'dates', 'members', 'groupStructure', 'accommodationFound', 'transportFound', 'activitiesFound'];
+      const data = fields.map(id => `${id}: ${document.getElementById(id).value}`).join('\n');
+
+      const docFile = document.getElementById('docUpload').files[0];
+      const docText = docFile ? await extractTextFromImage(docFile) : '';
+
+      const fullPrompt = `You are a travel AI. Based on this data, generate a:
+- Summary plan
+- Full day-by-day itinerary with time blocks (Morning / Afternoon / Evening)
+- Each day split by traveler if needed
+- Suggestions only for what’s missing (e.g., housing or transport)
+- Add estimated costs per item
+- At the end, summarize in budget and key notes
+
+User data:
+${data}\nDocument scan:
+${docText}`;
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${groqKey}`
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: fullPrompt }]
+        })
+      });
+
+      const resJson = await response.json();
+      const rawOutput = resJson.choices[0].message.content;
+
+      const split = rawOutput.split(/(?=\n## Day|\n## Budget|\n## Map|$)/);
+      const dayBlocks = split.filter(s => s.includes('## Day'));
+      const budgetBlock = split.find(s => s.includes('## Budget')) || '';
+
+      document.getElementById('dailyPlan').innerHTML = dayBlocks.map(day => `
+        <details class="bg-emerald-50 border border-emerald-200 p-4 rounded">
+          <summary class="font-bold text-lg">${day.split('\n')[0].replace('## ', '')}</summary>
+          <div class="mt-2">${marked.parse(day)}</div>
+        </details>
+      `).join('');
+
+      document.getElementById('budgetOverview').innerHTML = marked.parse(budgetBlock);
+    });
+
+    document.getElementById('exportPDF').addEventListener('click', () => {
+      html2pdf().from(document.getElementById("output")).set({
+        margin: 0.5,
+        filename: 'ultimate-travel-plan.pdf',
+        html2canvas: { scale: 2 },
+        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+      }).save();
+    });
+  </script></body>
+</html>
